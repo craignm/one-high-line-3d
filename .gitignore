@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+
+# Exclude raw PDF page renders & overlays from private offering plan PDF
+preview/
+extracted/site_grid.png
+extracted/elev_grid.png
+extracted/verify_site_overlay.png
+extracted/tower_hulls_raw.png
+extracted/tower_hulls_true.png
+extracted/tower_hulls_raster.png
+renders/verify_elevations.png

@@ -1,0 +1,10 @@
+manifold3d
+trimesh
+shapely
+numpy
+scipy
+matplotlib
+pillow
+pymupdf
+networkx
+lxml
