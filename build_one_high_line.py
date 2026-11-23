@@ -222,7 +222,10 @@ def build_podium_block(pts, z0, z1, n_floors, pier_spacing=14.0, pier_w=3.2,
     # Slight recessed roof inside parapet (parapet rim)
     parts.append(extrude_poly(p_in, z1, z1 + 0.5))
 
-    # Vertical piers placed cleanly along every straight edge (including every corner!)
+    # Vertical piers along every straight edge, clipped strictly flush to the outer polygon p_out!
+    # This produces razor-sharp mitered corner columns at every acute, right, and obtuse corner
+    # with zero protrusion beyond the building facades.
+    pier_parts = []
     n = len(p_out)
     for i in range(n):
         a = p_out[i]
@@ -237,9 +240,16 @@ def build_podium_block(pts, z0, z1, n_floors, pier_spacing=14.0, pier_w=3.2,
         for j in range(n_bays + 1):
             frac = j / n_bays
             pt = a + frac * edge
-            # Slightly widen corner piers
-            w = pier_w * (1.25 if (j == 0 or j == n_bays) else 1.0)
-            parts.append(build_pier_segment(pt, t, nrm, z0, pt, t, nrm, z1 + parapet_h, w, recess + 2.0, 0.0))
+            # Corner piers use 2x width so after clipping to p_out, each face gets a full pier_w corner band
+            w = pier_w * (2.0 if (j == 0 or j == n_bays) else 1.0)
+            pier_parts.append(build_pier_segment(
+                pt, t, nrm, z0, pt, t, nrm, z1 + parapet_h,
+                w, recess + 2.5, depth_out=pier_w
+            ))
+
+    podium_envelope = extrude_poly(p_out, z0, z1 + parapet_h)
+    piers_clipped = m3d.Manifold.batch_boolean(pier_parts, m3d.OpType.Add) ^ podium_envelope
+    parts.append(piers_clipped)
 
     return m3d.Manifold.batch_boolean(parts, m3d.OpType.Add)
 
@@ -372,18 +382,21 @@ def build_twisting_tower(polys, edge_bays, z_levels, crown_top_z, ref_angle_deg,
             n_v = np.array([t_v[1], -t_v[0]])
             edge_t.append(t_v); edge_n.append(n_v); edge_L.append(L)
 
-        # Single crisp vertical corner pier at each vertex
+        # Single crisp mitered vertical corner pier at each vertex (clipped flush to p_out!)
+        corner_parts = []
         for vi in range(n_edges):
             pt = p_out[vi]
             n_avg = edge_n[(vi - 1) % n_edges] + edge_n[vi]
             n_len = np.linalg.norm(n_avg)
             n_bis = n_avg / n_len if n_len > 1e-6 else edge_n[vi]
             t_bis = np.array([-n_bis[1], n_bis[0]])
-            parts.append(build_pier_segment(
+            corner_parts.append(build_pier_segment(
                 pt, t_bis, n_bis, z0 - 0.1,
                 pt, t_bis, n_bis, z1 + 0.15,
-                width=pier_w * 1.15, depth_in=d_in, depth_out=0.0
+                width=pier_w * 1.8, depth_in=d_in + 1.5, depth_out=pier_w
             ))
+        floor_env = extrude_poly(p_out, z0 - 0.15, z1 + 0.2)
+        parts.append(m3d.Manifold.batch_boolean(corner_parts, m3d.OpType.Add) ^ floor_env)
 
         # Intermediate vertical piers strictly between corners
         for ei in range(n_edges):

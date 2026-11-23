@@ -126,22 +126,23 @@ plt.tight_layout()
 plt.savefig(os.path.join(REND_DIR, "showcase_4views.png"), dpi=130)
 plt.close(fig)
 
-# Create a side-by-side comparison of N Elevation & S Elevation: PDF vs Our 3D Model!
+# Create a side-by-side comparison of N Elevation & S Elevation: PDF vs Our 3D Model (if PDF is available)
 PDF_PATH = os.environ.get("OHL_PDF_PATH", "One Highline floor plans.pdf")
-doc = pymupdf.open(PDF_PATH)
-fig, axes = plt.subplots(2, 2, figsize=(16, 12))
-for row, (pno, rkey, lbl) in enumerate([(2, "elev_north.png", "North Elevation"), (4, "elev_south.png", "South Elevation")]):
-    pix = doc[pno - 1].get_pixmap(dpi=120)
-    pdf_im = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
-    # Crop PDF elevation region
-    h, w = pdf_im.shape[:2]
-    axes[row, 0].imshow(pdf_im[int(h*0.16):int(h*0.73), int(w*0.08):int(w*0.92)])
-    axes[row, 0].set_title(f"PDF {lbl}", fontsize=12)
-    axes[row, 0].axis("off")
-    axes[row, 1].imshow(imgs[rkey][0])
-    axes[row, 1].set_title(f"3D Model {lbl}", fontsize=12)
-    axes[row, 1].axis("off")
-plt.tight_layout()
-plt.savefig(os.path.join(REND_DIR, "verify_elevations.png"), dpi=130)
-plt.close(fig)
+if os.path.exists(PDF_PATH):
+    doc = pymupdf.open(PDF_PATH)
+    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+    for row, (pno, rkey, lbl) in enumerate([(2, "elev_north.png", "North Elevation"), (4, "elev_south.png", "South Elevation")]):
+        pix = doc[pno - 1].get_pixmap(dpi=120)
+        pdf_im = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
+        # Crop PDF elevation region
+        h, w = pdf_im.shape[:2]
+        axes[row, 0].imshow(pdf_im[int(h*0.16):int(h*0.73), int(w*0.08):int(w*0.92)])
+        axes[row, 0].set_title(f"PDF {lbl}", fontsize=12)
+        axes[row, 0].axis("off")
+        axes[row, 1].imshow(imgs[rkey][0])
+        axes[row, 1].set_title(f"3D Model {lbl}", fontsize=12)
+        axes[row, 1].axis("off")
+    plt.tight_layout()
+    plt.savefig(os.path.join(REND_DIR, "verify_elevations.png"), dpi=130)
+    plt.close(fig)
 print("All renders complete!")
