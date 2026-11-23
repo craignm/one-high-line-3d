@@ -287,11 +287,11 @@ W_DELTA_W7_TO_W36 = np.array([
 ], dtype=np.float64)
 WEST_EDGE_BAYS = [6, 5, 3, 3, 5, 2]  # [W, S, SE_twist, E, N, NW_twist]
 
-# 30 stories from W6 (t=-1/29) to W36 (t=1.0), plus roof slab at W37 (t=1.0)
+# 30 stories from W6 (t=-1/29) to W36 (t=1.0), plus roof level W37 (t=1.0 + 1/29) -> 31 level polygons
 n_w_floors = 30
 w_z_levels = np.linspace(55.5, 395.5, n_w_floors + 1)
-t_w_floors = np.linspace(-1.0 / 29.0, 1.0, n_w_floors)
-w_polys_all = [W_BASE_W7 + t * W_DELTA_W7_TO_W36 for t in t_w_floors]
+t_w_levels = np.linspace(-1.0 / 29.0, 1.0, n_w_floors + 1)
+w_polys_all = [W_BASE_W7 + t * W_DELTA_W7_TO_W36 for t in t_w_levels]
 
 # --- EAST TOWER (19 floors: E7..E26, Z = 75.5' to 296.17') ---
 # Calibrated directly from FFT-registered E15..E26 (11 floors), extrapolated linearly to E7 (7 floors below E15):
@@ -316,11 +316,11 @@ E_DELTA_PER_FLOOR = np.array([
 ], dtype=np.float64)
 EAST_EDGE_BAYS = [4, 5, 1, 7, 4, 2]  # [W, S, SE_twist, E, N, NW_twist]
 
-# 19 stories: E7 (df=-7) through E26 (df=+11)
+# 19 stories: E7 (df=-7) through E27 roof (df=+11) -> 20 level polygons
 n_e_floors = 19
 e_z_levels = np.linspace(75.5, 296.17, n_e_floors + 1)
-df_e_floors = np.linspace(-7.0, 11.0, n_e_floors)
-e_polys_all = [E_BASE_E15 + df * E_DELTA_PER_FLOOR for df in df_e_floors]
+df_e_levels = np.linspace(-7.0, 11.0, n_e_floors + 1)
+e_polys_all = [E_BASE_E15 + df * E_DELTA_PER_FLOOR for df in df_e_levels]
 
 
 # =============================================================================
@@ -329,91 +329,117 @@ e_polys_all = [E_BASE_E15 + df * E_DELTA_PER_FLOOR for df in df_e_floors]
 
 def build_twisting_tower(polys, edge_bays, z_levels, crown_top_z, ref_angle_deg, name="Tower"):
     """
-    Build a complete twisting tower from exact 6-vertex floor polygons:
-      - All 4 main facades (N, S, E, W) are EXACT planar parallelograms
-        composed of strictly vertical 1-story piers & 90-deg rectangular windows.
-      - ONLY the NW and SE corners twist, with exact specified bay counts
-        (NW: 2 bays on both towers; SE: 3 bays on West, 1 bay on East).
-      - Top penthouse wrap-around open colonnade loggia (deeply recessed top floor).
-      - Flared mechanical crown with crisp vertical architectural louver fins.
+    Build a complete twisting tower from exact 6-vertex floor-level polygons polys[0..n_floors]:
+      - All 6 outer corners form RAZOR-STRAIGHT, CONTINUOUS DIAGONAL EDGES from bottom to top!
+      - All 4 main facades (N, S, E, W) are EXACT planar parallelograms.
+      - Inside each floor, the intermediate piers are STRICTLY VERTICAL 1-story blocks
+        framing crisp 90-deg rectangular windows that stair-step horizontally floor-to-floor.
+      - ONLY the NW and SE corners twist (NW: 2 bays; SE: 3 bays on West, 1 wide bay on East).
+      - Top penthouse wrap-around open colonnade loggia + flared louvered mechanical crown.
     """
-    n_floors = len(polys)
+    n_floors = len(z_levels) - 1
     recess = 2.6        # 1.76 mm window recess at 1:450
     spandrel_h = 2.6    # 1.76 mm horizontal floor spandrel band
     chamfer_h = 2.0     # subtle 45-deg soffit bevel for support-free FDM printing
-    pier_w = 3.5        # 2.37 mm vertical travertine pier width
+    pier_w = 3.5        # 2.37 mm travertine pier width
+
+    def interp_poly(p0, p1, frac):
+        return p0 * (1.0 - frac) + p1 * frac
+
+    def edge_frames(p):
+        n_e = len(p)
+        et, en, eL = [], [], []
+        for ei in range(n_e):
+            e = p[(ei + 1) % n_e] - p[ei]
+            L = np.linalg.norm(e)
+            tv = e / max(L, 1e-9)
+            nv = np.array([tv[1], -tv[0]])
+            et.append(tv); en.append(nv); eL.append(L)
+        return et, en, eL
+
+    def vertex_bisectors(en):
+        n_e = len(en)
+        tb, nb = [], []
+        for vi in range(n_e):
+            na = en[(vi - 1) % n_e] + en[vi]
+            nl = np.linalg.norm(na)
+            n_b = na / nl if nl > 1e-6 else en[vi]
+            t_b = np.array([-n_b[1], n_b[0]])
+            tb.append(t_b); nb.append(n_b)
+        return tb, nb
 
     parts = []
     for k in range(n_floors):
         z0, z1 = z_levels[k], z_levels[k + 1]
+        dz = z1 - z0
         is_ph = (k == n_floors - 1)
-        p_out = poly_ccw(polys[k])
+        p0 = poly_ccw(polys[k])
+        p1 = poly_ccw(polys[k + 1])
+        p_mid = 0.5 * (p0 + p1)
+
+        # Continuous diagonal outer envelope for floor k (straight diagonal corners!)
+        floor_env = loft_polygons(p0, z0 - 0.15, p1, z1 + 0.15)
+
+        # 1. Continuous diagonal recessed glass core for floor k
         r_in = 10.5 if is_ph else recess
-        p_in = inset_poly(p_out, r_in)
+        p0_in = resample_poly_aligned(inset_poly(p0, r_in), 64, ref_angle_deg)
+        p1_in = resample_poly_aligned(inset_poly(p1, r_in), 64, ref_angle_deg)
+        parts.append(loft_polygons(p0_in, z0 - 0.2, p1_in, z1 + 0.2))
 
-        # 1. Strictly VERTICAL recessed glass core for floor k (crisp 90-deg rectangular windows!)
-        parts.append(extrude_poly(p_in, z0 - 0.2, z1 + 0.2))
-
-        # 2. Horizontal spandrel slab at bottom of floor k
+        # 2. Horizontal floor spandrels (flush with the continuous diagonal outer envelope!)
         if k == 0:
-            parts.append(extrude_poly(p_out, z0 - 2.0, z0 + spandrel_h * 0.6))
+            p_sp = interp_poly(p0, p1, (spandrel_h * 0.6) / dz)
+            parts.append(loft_polygons(p0, z0 - 2.0, p_sp, z0 + spandrel_h * 0.6))
         else:
-            p_prev_in = inset_poly(poly_ccw(polys[k - 1]), recess)
-            p_bevel_bot = resample_poly_aligned(p_prev_in, 64, ref_angle_deg)
-            p_bevel_top = resample_poly_aligned(p_out, 64, ref_angle_deg)
-            parts.append(loft_polygons(p_bevel_bot, z0 - chamfer_h, p_bevel_top, z0))
-            parts.append(extrude_poly(p_out, z0, z0 + spandrel_h * 0.55))
+            p_sp = interp_poly(p0, p1, (spandrel_h * 0.55) / dz)
+            parts.append(loft_polygons(p0, z0 - 0.1, p_sp, z0 + spandrel_h * 0.55))
 
-        # Top spandrel lintel of floor k
         if not is_ph:
-            parts.append(build_chamfered_spandrel(p_out, p_in, z1 - spandrel_h * 0.55, z1 + 0.2, chamfer_h=1.8))
+            # Top spandrel lintel of floor k with 45-deg support-free underside bevel
+            f_lintel = (dz - spandrel_h * 0.55) / dz
+            f_bevel  = (dz - spandrel_h * 0.55 - chamfer_h) / dz
+            p_lintel = interp_poly(p0, p1, f_lintel)
+            p_bevel_in = resample_poly_aligned(inset_poly(interp_poly(p0, p1, f_bevel), recess), 64, ref_angle_deg)
+            p_lintel_r = resample_poly_aligned(p_lintel, 64, ref_angle_deg)
+            parts.append(loft_polygons(p_bevel_in, z1 - spandrel_h * 0.55 - chamfer_h, p_lintel_r, z1 - spandrel_h * 0.55))
+            parts.append(loft_polygons(p_lintel, z1 - spandrel_h * 0.55, p1, z1 + 0.15))
 
-        # 3. Strictly VERTICAL 1-floor-high travertine piers:
-        #    - ONE clean vertical corner pier at each of the 6 vertices (aligned to edge bisector -> no doubled-up corners!)
-        #    - Intermediate piers strictly inside each edge (j = 1 .. n_bays - 1)
-        d_in = 3.8 if is_ph else (recess + 2.2)
-        n_edges = len(p_out)
-        # Precompute unit edge tangents & outward normals
-        edge_t, edge_n, edge_L = [], [], []
-        for ei in range(n_edges):
-            e = p_out[(ei + 1) % n_edges] - p_out[ei]
-            L = np.linalg.norm(e)
-            t_v = e / max(L, 1e-9)
-            n_v = np.array([t_v[1], -t_v[0]])
-            edge_t.append(t_v); edge_n.append(n_v); edge_L.append(L)
+        # 3a. CONTINUOUS DIAGONAL CORNER PIERS along all 6 corners (clipped flush to floor_env!)
+        d_in = 3.8 if is_ph else (recess + 2.4)
+        et0, en0, _ = edge_frames(p0)
+        et1, en1, _ = edge_frames(p1)
+        tb0, nb0 = vertex_bisectors(en0)
+        tb1, nb1 = vertex_bisectors(en1)
+        n_edges = len(p0)
 
-        # Single crisp mitered vertical corner pier at each vertex (clipped flush to p_out!)
-        corner_parts = []
+        pier_solids = []
         for vi in range(n_edges):
-            pt = p_out[vi]
-            n_avg = edge_n[(vi - 1) % n_edges] + edge_n[vi]
-            n_len = np.linalg.norm(n_avg)
-            n_bis = n_avg / n_len if n_len > 1e-6 else edge_n[vi]
-            t_bis = np.array([-n_bis[1], n_bis[0]])
-            corner_parts.append(build_pier_segment(
-                pt, t_bis, n_bis, z0 - 0.1,
-                pt, t_bis, n_bis, z1 + 0.15,
-                width=pier_w * 1.8, depth_in=d_in + 1.5, depth_out=pier_w
+            pier_solids.append(build_pier_segment(
+                p0[vi], tb0[vi], nb0[vi], z0 - 0.15,
+                p1[vi], tb1[vi], nb1[vi], z1 + 0.15,
+                width=pier_w * 2.0, depth_in=d_in + 1.5, depth_out=pier_w
             ))
-        floor_env = extrude_poly(p_out, z0 - 0.15, z1 + 0.2)
-        parts.append(m3d.Manifold.batch_boolean(corner_parts, m3d.OpType.Add) ^ floor_env)
 
-        # Intermediate vertical piers strictly between corners
+        # 3b. STRICTLY VERTICAL 1-story intermediate piers (crisp stair-stepped rectangular windows!)
+        etm, enm, eLm = edge_frames(p_mid)
         for ei in range(n_edges):
-            if edge_L[ei] < 1.0:
+            if eLm[ei] < 1.0:
                 continue
-            a = p_out[ei]
-            b = p_out[(ei + 1) % n_edges]
+            a = p_mid[ei]
+            b = p_mid[(ei + 1) % n_edges]
             edge = b - a
             n_bays = edge_bays[ei]
             for j in range(1, n_bays):
                 frac = j / n_bays
                 pt = a + frac * edge
-                parts.append(build_pier_segment(
-                    pt, edge_t[ei], edge_n[ei], z0 - 0.1,
-                    pt, edge_t[ei], edge_n[ei], z1 + 0.15,
-                    width=pier_w, depth_in=d_in, depth_out=0.0
+                # Strictly vertical (pt -> pt), clipped cleanly to floor_env so nothing protrudes!
+                pier_solids.append(build_pier_segment(
+                    pt, etm[ei], enm[ei], z0 - 0.15,
+                    pt, etm[ei], enm[ei], z1 + 0.15,
+                    width=pier_w, depth_in=d_in + 1.2, depth_out=2.0
                 ))
+
+        parts.append(m3d.Manifold.batch_boolean(pier_solids, m3d.OpType.Add) ^ floor_env)
 
     # Top roof cornice slab at z_levels[-1] (caps the penthouse colonnade)
     zk = z_levels[-1]
